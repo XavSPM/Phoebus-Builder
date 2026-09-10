@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Phoebus Builder
+Comment=Phoebus Native Installer Builder
+Exec=phoebus-builder
+Icon=phoebus-builder
+Terminal=false
+Type=Application
+Categories=Development;Building;Utility;
+StartupWMClass=phoebus-builder

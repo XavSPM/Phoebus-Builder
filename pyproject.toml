@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phoebus-builder"
+version = "1.0.0"
+description = "GUI and automated packager for custom Phoebus native installers (Debian, RPM, Windows)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+    { name = "Xavier Goiziou", email = "xavier.goiziou@gmail.com" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Topic :: Software Development :: Build Tools",
+    "Environment :: X11 Applications",
+    "Environment :: Win32 (MS Windows)",
+]
+dependencies = [
+    "PySide6>=6.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/XavSPM/Phoebus-Builder"
+Repository = "https://github.com/XavSPM/Phoebus-Builder"
+"Bug Tracker" = "https://github.com/XavSPM/Phoebus-Builder/issues"
+
+[project.optional-dependencies]
+images = ["pillow>=9.0.0"]
+cert = ["certifi"]
+all = ["pillow>=9.0.0", "certifi"]
+
+[project.scripts]
+phoebus-builder = "phoebus_builder.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["phoebus_builder*"]
+
+[tool.setuptools.package-data]
+phoebus_builder = [
+    "resources/**/*",
+    "resources/*",
+    "assets/*",
+]
+
+[tool.setuptools.data-files]
+"share/applications" = ["phoebus_builder/assets/phoebus-builder.desktop"]
+"share/icons/hicolor/64x64/apps" = ["phoebus_builder/assets/phoebus-builder.png"]
+"share/icons/hicolor/128x128/apps" = ["phoebus_builder/assets/phoebus-builder.png"]
+"share/pixmaps" = ["phoebus_builder/assets/phoebus-builder.png"]
+
+
