@@ -374,20 +374,6 @@ public class {class_name} extends PhoebusApplication {{
 
         return extracted_root, main_jars[0]
 
-    def _get_phoebus_download_info(self) -> Tuple[str, Path]:
-        """Returns download URL and local path for prebuilt Phoebus distribution archive."""
-        version_no_v = self.config.phoebus_branch.lstrip("v")
-        tag = self.config.phoebus_branch
-        
-        if self.is_windows:
-            filename = f"phoebus-{version_no_v}-win.zip"
-        else:
-            filename = f"phoebus-{version_no_v}-linux.tar.gz"
-
-        url = f"https://github.com/ControlSystemStudio/phoebus/releases/download/{tag}/{filename}"
-        local_path = self.build_dir / filename
-        return url, local_path
-
     def _ensure_wix_modern_extensions(self, wix_exe: str) -> None:
         """Ensures WixToolset.Util.wixext and WixToolset.UI.wixext are installed for WiX 4/5."""
         w_flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
@@ -438,37 +424,8 @@ public class {class_name} extends PhoebusApplication {{
         return wix_dir
 
     def _prepare_phoebus(self, sources_dir: Path) -> Tuple[Path, Path]:
-        """Downloads or builds Phoebus and prepares staging work directory."""
-        if self.config.build_from_source:
-            return self._build_from_sources_maven(sources_dir)
-
-        url, archive_path = self._get_phoebus_download_info()
-        print("  [>] Downloading / verifying prebuilt Phoebus binaries...")
-        DownloadManager.download_file(url, archive_path)
-
-        work_dir = self.build_dir / ("jpackage_work_win" if self.is_windows else "jpackage_work")
-        print(f"  [>] Preparing work directory: {work_dir}...")
-        DownloadManager.extract_archive(archive_path, work_dir, clean_target=True)
-
-        extracted_dirs = [p for p in work_dir.iterdir() if p.is_dir() and (p.name.startswith("phoebus") or p.name.startswith("product"))]
-        if not extracted_dirs:
-            subdirs = [p for p in work_dir.iterdir() if p.is_dir()]
-            extracted_root = subdirs[0] if subdirs else work_dir
-        else:
-            extracted_root = extracted_dirs[0]
-
-        print(f"  [OK] Extracted root: {extracted_root}")
-
-        main_jars = list(extracted_root.glob("product-*.jar")) or list(extracted_root.glob("phoebus-*.jar"))
-        if not main_jars:
-            main_jars = list(extracted_root.rglob("product-*.jar")) or list(extracted_root.rglob("phoebus-*.jar"))
-
-        if not main_jars:
-            raise FileNotFoundError("Could not identify main Phoebus product JAR.")
-
-        main_jar = main_jars[0]
-        print(f"  [OK] Main JAR identified: {main_jar.name}")
-        return extracted_root, main_jar
+        """Builds Phoebus from sources with Maven and prepares staging work directory."""
+        return self._build_from_sources_maven(sources_dir)
 
     def _inject_resources(self, extracted_root: Path, sources_dir: Optional[Path] = None) -> None:
         """Injects custom assets (UI, settings.ini, logo, splash screen) into Phoebus directory."""

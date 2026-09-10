@@ -197,10 +197,11 @@ class JvmManager:
         archive_dir.mkdir(parents=True, exist_ok=True)
         archive_path = archive_dir / f"jdk-{self.java_version}-{'win' if self.is_windows else 'linux'}.{archive_ext}"
 
-        DownloadManager.download_file(self.get_adoptium_url(), archive_path)
-
-        DownloadManager.extract_archive(archive_path, self.jdk_dir, clean_target=True, strip_root=True)
-        archive_path.unlink(missing_ok=True)
+        try:
+            DownloadManager.download_file(self.get_adoptium_url(), archive_path)
+            DownloadManager.extract_archive(archive_path, self.jdk_dir, clean_target=True, strip_root=True)
+        finally:
+            archive_path.unlink(missing_ok=True)
 
         if not self.is_jdk_ready(self.jdk_dir, self.is_windows):
             raise RuntimeError(f"Failed to configure JDK in {self.jdk_dir}")

@@ -623,6 +623,26 @@ class TestDownloadManager(unittest.TestCase):
         self.assertTrue((extract_dest / "test_file.txt").exists())
         self.assertEqual((extract_dest / "test_file.txt").read_text(encoding="utf-8"), "hello zip")
 
+    def test_archive_validity_and_corrupt_cleanup(self):
+        import zipfile
+        valid_zip = self.temp_dir / "valid.zip"
+        with zipfile.ZipFile(valid_zip, "w") as z:
+            z.writestr("a.txt", "data")
+        self.assertTrue(DownloadManager.is_archive(valid_zip))
+        self.assertTrue(DownloadManager.is_valid_archive(valid_zip))
+
+        # Truncated or corrupt zip
+        corrupt_zip = self.temp_dir / "corrupt.zip"
+        corrupt_zip.write_bytes(b"PK\x03\x04incomplete_zip_data_without_central_directory")
+        self.assertTrue(DownloadManager.is_archive(corrupt_zip))
+        self.assertFalse(DownloadManager.is_valid_archive(corrupt_zip))
+
+        # Extracting a corrupted zip should fail and delete the corrupted archive to allow clean retries
+        dest = self.temp_dir / "corrupt_extract"
+        with self.assertRaises(RuntimeError):
+            DownloadManager.extract_archive(corrupt_zip, dest)
+        self.assertFalse(corrupt_zip.exists())
+
     def test_is_maven_ready(self):
         self.assertFalse(DownloadManager.is_maven_ready(self.temp_dir / "empty_mvn"))
 

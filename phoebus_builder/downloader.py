@@ -85,6 +85,42 @@ class DownloadManager:
         )
         sys.stdout.flush()
 
+    @staticmethod
+    def is_archive(path: Path | str) -> bool:
+        """Returns True if the filename has a known archive extension."""
+        name = str(path).lower()
+        return name.endswith((".zip", ".tar.gz", ".tgz", ".tar"))
+
+    @classmethod
+    def is_valid_archive(cls, archive_path: Path | str) -> bool:
+        """Verifies if an archive file (.zip, .tar.gz, .tgz) exists, is non-empty, and structurally intact."""
+        p = Path(archive_path)
+        if not p.exists() or not p.is_file() or p.stat().st_size == 0:
+            return False
+
+        name_lower = p.name.lower()
+        if name_lower.endswith(".zip"):
+            if not zipfile.is_zipfile(p):
+                return False
+            try:
+                with zipfile.ZipFile(p, "r") as z:
+                    if not z.infolist():
+                        return False
+                return True
+            except Exception:
+                return False
+        elif name_lower.endswith((".tar.gz", ".tgz", ".tar")):
+            if not tarfile.is_tarfile(p):
+                return False
+            try:
+                with tarfile.open(p, "r:*") as t:
+                    if not t.getmembers():
+                        return False
+                return True
+            except Exception:
+                return False
+        return True
+
     @classmethod
     def download_file(
         cls,
@@ -98,8 +134,16 @@ class DownloadManager:
         destination.parent.mkdir(parents=True, exist_ok=True)
 
         if destination.exists() and destination.stat().st_size > 0 and not force:
-            print(f"  [OK] Cached file already exists: {destination.name}")
-            return destination
+            if cls.is_archive(destination):
+                if cls.is_valid_archive(destination):
+                    print(f"  [OK] Cached file already exists: {destination.name}")
+                    return destination
+                else:
+                    print(f"  [!] Cached file {destination.name} is incomplete or corrupted. Re-downloading...")
+                    destination.unlink(missing_ok=True)
+            else:
+                print(f"  [OK] Cached file already exists: {destination.name}")
+                return destination
 
         print(f"  [>] Downloading from: {url}")
         print(f"      To: {destination}")
@@ -110,8 +154,12 @@ class DownloadManager:
         req = urllib.request.Request(url, headers=headers)
         ssl_ctx = cls.get_ssl_context()
 
+        temp_dest = destination.parent / f"{destination.name}.part"
+        if temp_dest.exists():
+            temp_dest.unlink(missing_ok=True)
+
         def _do_download(context: Optional[ssl.SSLContext]):
-            with urllib.request.urlopen(req, context=context, timeout=timeout) as response, open(destination, "wb") as out_file:
+            with urllib.request.urlopen(req, context=context, timeout=timeout) as response, open(temp_dest, "wb") as out_file:
                 total_size = int(response.headers.get("Content-Length", 0))
                 downloaded = 0
                 block_size = 64 * 1024
@@ -129,6 +177,11 @@ class DownloadManager:
                     else:
                         cls._reporthook(block_num, block_size, total_size)
 
+                if total_size > 0 and downloaded < total_size:
+                    raise RuntimeError(
+                        f"Download truncated for {destination.name}: received {downloaded}/{total_size} bytes."
+                    )
+
         try:
             try:
                 _do_download(ssl_ctx)
@@ -137,10 +190,20 @@ class DownloadManager:
                 err_str = str(ssl_err)
                 if "CERTIFICATE_VERIFY_FAILED" in err_str or "certificate verify failed" in err_str or isinstance(ssl_err, ssl.SSLError):
                     print("  [!] SSL certificate verification failed. Retrying with permissive SSL context...")
+                    if temp_dest.exists():
+                        temp_dest.unlink(missing_ok=True)
                     unverified_ctx = ssl._create_unverified_context()
                     _do_download(unverified_ctx)
                 else:
                     raise
+
+            if cls.is_archive(temp_dest) and not cls.is_valid_archive(temp_dest):
+                temp_dest.unlink(missing_ok=True)
+                raise RuntimeError(f"Downloaded archive for {destination.name} failed integrity check.")
+
+            if destination.exists():
+                destination.unlink(missing_ok=True)
+            shutil.move(str(temp_dest), str(destination))
 
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -148,7 +211,9 @@ class DownloadManager:
             return destination
         except Exception as e:
             sys.stdout.write("\n")
-            if destination.exists():
+            if temp_dest.exists():
+                temp_dest.unlink(missing_ok=True)
+            if destination.exists() and cls.is_archive(destination) and not cls.is_valid_archive(destination):
                 destination.unlink(missing_ok=True)
             raise RuntimeError(f"Error downloading {url}: {e}")
 
@@ -167,64 +232,71 @@ class DownloadManager:
         extract_to.mkdir(parents=True, exist_ok=True)
         print(f"  [>] Extracting {archive_path.name}...")
 
-        if archive_path.name.endswith(".tar.gz") or archive_path.name.endswith(".tgz"):
-            with tarfile.open(archive_path, "r:gz") as tar:
-                members = tar.getmembers()
-                if strip_root:
-                    first_parts = [m.name.split("/")[0] for m in members if "/" in m.name]
-                    common_root = first_parts[0] if first_parts and all(m.name.startswith(first_parts[0] + "/") or m.name == first_parts[0] for m in members) else None
-                    filtered_members = []
-                    for m in members:
-                        if common_root:
-                            if m.name == common_root:
-                                continue
-                            if m.name.startswith(common_root + "/"):
-                                m.name = m.name[len(common_root) + 1:]
-                        if m.name:
-                            filtered_members.append(m)
-                    if hasattr(tarfile, "data_filter"):
-                        tar.extractall(path=extract_to, members=filtered_members, filter="data")
+        try:
+            if archive_path.name.endswith(".tar.gz") or archive_path.name.endswith(".tgz"):
+                with tarfile.open(archive_path, "r:gz") as tar:
+                    members = tar.getmembers()
+                    if strip_root:
+                        first_parts = [m.name.split("/")[0] for m in members if "/" in m.name]
+                        common_root = first_parts[0] if first_parts and all(m.name.startswith(first_parts[0] + "/") or m.name == first_parts[0] for m in members) else None
+                        filtered_members = []
+                        for m in members:
+                            if common_root:
+                                if m.name == common_root:
+                                    continue
+                                if m.name.startswith(common_root + "/"):
+                                    m.name = m.name[len(common_root) + 1:]
+                            if m.name:
+                                filtered_members.append(m)
+                        if hasattr(tarfile, "data_filter"):
+                            tar.extractall(path=extract_to, members=filtered_members, filter="data")
+                        else:
+                            tar.extractall(path=extract_to, members=filtered_members)
                     else:
-                        tar.extractall(path=extract_to, members=filtered_members)
-                else:
-                    if hasattr(tarfile, "data_filter"):
-                        tar.extractall(path=extract_to, filter="data")
+                        if hasattr(tarfile, "data_filter"):
+                            tar.extractall(path=extract_to, filter="data")
+                        else:
+                            tar.extractall(path=extract_to)
+            elif archive_path.name.endswith(".zip"):
+                with zipfile.ZipFile(archive_path, "r") as z:
+                    if strip_root:
+                        infolist = z.infolist()
+                        first_parts = [info.filename.split("/")[0] for info in infolist if "/" in info.filename]
+                        common_root = first_parts[0] if first_parts and all(info.filename.startswith(first_parts[0] + "/") or info.filename in (first_parts[0], first_parts[0] + "/") for info in infolist) else None
+                        for info in infolist:
+                            orig = info.filename
+                            if common_root:
+                                if orig in (common_root, common_root + "/"):
+                                    continue
+                                if orig.startswith(common_root + "/"):
+                                    info.filename = orig[len(common_root) + 1:]
+                            if info.filename:
+                                extracted_file = z.extract(info, path=extract_to)
+                                if os.name != "nt":
+                                    mode = (info.external_attr >> 16) & 0o777
+                                    if mode:
+                                        try:
+                                            os.chmod(extracted_file, mode)
+                                        except Exception:
+                                            pass
                     else:
-                        tar.extractall(path=extract_to)
-        elif archive_path.name.endswith(".zip"):
-            with zipfile.ZipFile(archive_path, "r") as z:
-                if strip_root:
-                    infolist = z.infolist()
-                    first_parts = [info.filename.split("/")[0] for info in infolist if "/" in info.filename]
-                    common_root = first_parts[0] if first_parts and all(info.filename.startswith(first_parts[0] + "/") or info.filename in (first_parts[0], first_parts[0] + "/") for info in infolist) else None
-                    for info in infolist:
-                        orig = info.filename
-                        if common_root:
-                            if orig in (common_root, common_root + "/"):
-                                continue
-                            if orig.startswith(common_root + "/"):
-                                info.filename = orig[len(common_root) + 1:]
-                        if info.filename:
-                            extracted_file = z.extract(info, path=extract_to)
-                            if os.name != "nt":
+                        z.extractall(path=extract_to)
+                        if os.name != "nt":
+                            for info in z.infolist():
                                 mode = (info.external_attr >> 16) & 0o777
                                 if mode:
                                     try:
-                                        os.chmod(extracted_file, mode)
+                                        os.chmod(extract_to / info.filename, mode)
                                     except Exception:
                                         pass
-                else:
-                    z.extractall(path=extract_to)
-                    if os.name != "nt":
-                        for info in z.infolist():
-                            mode = (info.external_attr >> 16) & 0o777
-                            if mode:
-                                try:
-                                    os.chmod(extract_to / info.filename, mode)
-                                except Exception:
-                                    pass
-        else:
-            raise ValueError(f"Unsupported archive format: {archive_path.name}")
+            else:
+                raise ValueError(f"Unsupported archive format: {archive_path.name}")
+        except Exception as e:
+            if archive_path.exists():
+                archive_path.unlink(missing_ok=True)
+            if clean_target and extract_to.exists():
+                safe_rmtree(extract_to, ignore_errors=True)
+            raise RuntimeError(f"Error extracting {archive_path.name}: {e}") from e
 
         print(f"  [OK] Extraction completed in {extract_to}")
         return extract_to
@@ -282,8 +354,10 @@ class DownloadManager:
         print(f"\n  [>] Fetching Phoebus sources ({tag})...")
         cls.download_file(url, archive_path, force=force)
 
-        cls.extract_archive(archive_path, sources_dir, clean_target=True, strip_root=True)
-        archive_path.unlink(missing_ok=True)
+        try:
+            cls.extract_archive(archive_path, sources_dir, clean_target=True, strip_root=True)
+        finally:
+            archive_path.unlink(missing_ok=True)
 
         if not cls.is_valid_sources_dir(sources_dir):
             raise RuntimeError(f"Phoebus sources extracted to {sources_dir} appear invalid or incomplete.")
@@ -389,9 +463,11 @@ class DownloadManager:
         archive_path = archive_dir / "apache-maven-bin.zip"
         download_url = url or cls.MAVEN_URL
 
-        cls.download_file(download_url, archive_path, force=force)
-        cls.extract_archive(archive_path, maven_dir, clean_target=True, strip_root=True)
-        archive_path.unlink(missing_ok=True)
+        try:
+            cls.download_file(download_url, archive_path, force=force)
+            cls.extract_archive(archive_path, maven_dir, clean_target=True, strip_root=True)
+        finally:
+            archive_path.unlink(missing_ok=True)
 
         if os.name != "nt":
             bin_dir = maven_dir / "bin"
@@ -482,9 +558,11 @@ class DownloadManager:
         archive_path = archive_dir / "wix311-binaries.zip"
         download_url = url or cls.WIX_URL
 
-        cls.download_file(download_url, archive_path, force=force)
-        cls.extract_archive(archive_path, wix_dir, clean_target=True, strip_root=False)
-        archive_path.unlink(missing_ok=True)
+        try:
+            cls.download_file(download_url, archive_path, force=force)
+            cls.extract_archive(archive_path, wix_dir, clean_target=True, strip_root=False)
+        finally:
+            archive_path.unlink(missing_ok=True)
 
         if not cls.is_wix_ready(wix_dir):
             raise RuntimeError(f"Failed to configure WiX Toolset in {wix_dir}")
